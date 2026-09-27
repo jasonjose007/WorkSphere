@@ -282,8 +282,14 @@ export function MultiCityComparison({
       setPrevParamsString(currentParamsString);
       const urlCities = parseCitiesFromParams(searchParams);
       const urlFilters = parseFiltersFromParams(searchParams);
-      setSelectedCities(urlCities);
-      setSelectedFilters(urlFilters);
+      // Only update state when values actually differ to prevent a new array
+      // reference from triggering the fetch useEffect on every URL write.
+      setSelectedCities((prev) =>
+        prev.join(",") === urlCities.join(",") ? prev : urlCities,
+      );
+      setSelectedFilters((prev) =>
+        prev.join(",") === urlFilters.join(",") ? prev : urlFilters,
+      );
     }
   }, [searchParams, prevParamsString]);
 
@@ -679,7 +685,7 @@ export function MultiCityComparison({
             Select Cities to Compare
           </label>
 
-          <div className="flex flex-wrap gap-2 mb-3">
+          <div className="flex flex-wrap gap-2 mb-3 min-w-0">
             {availableCities.map((city) => {
               const isSelected = selectedCities.includes(city);
               return (
@@ -687,7 +693,7 @@ export function MultiCityComparison({
                   key={city}
                   type="button"
                   onClick={() => toggleCity(city)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all max-w-[160px] min-w-0 shrink-0 sm:max-w-none ${
                     isSelected
                       ? "bg-blue-600 text-white shadow-md shadow-blue-500/20 ring-2 ring-blue-500/30 scale-[1.02]"
                       : "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:border-blue-500/50"

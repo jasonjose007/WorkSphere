@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { ReactiveUserButton } from "@/components/ReactiveUserButton";
 import { Coffee, LayoutGrid, Menu, Shield, X } from "lucide-react";
@@ -11,18 +12,64 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { NotificationBell } from "@/components/NotificationBell";
 import { StreakBadge } from "@/components/Header/StreakBadge";
 import { OfflineSyncProgressBar } from "@/components/OfflineSyncProgressBar";
+import { WebSocketLatencyBadge } from "@/components/WebSocketLatencyBadge";
+import { type LatencyTier } from "@/hooks/useWebSocketLatency";
 
 interface TopNavProps {
   hideAuth?: boolean;
 }
 
+function useConnectionLatency(): { latencyMs: number | null; tier: LatencyTier } {
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function probe() {
+      try {
+        const start = performance.now();
+        await fetch("/favicon.ico", { method: "HEAD", cache: "no-store" });
+        if (!cancelled) setLatencyMs(Math.round(performance.now() - start));
+      } catch {
+        if (!cancelled) setLatencyMs(null);
+      }
+    }
+
+    probe();
+    const id = setInterval(probe, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const tier: LatencyTier =
+    latencyMs === null
+      ? "unknown"
+      : latencyMs < 50
+        ? "good"
+        : latencyMs < 150
+          ? "fair"
+          : "poor";
+
+  return { latencyMs, tier };
+}
+
 export function TopNav({ hideAuth = false }: TopNavProps) {
   const { isSignedIn } = useUser();
+  const { latencyMs, tier } = useConnectionLatency();
+  const pathname = usePathname();
 
-  console.log({
-    hideAuth,
-    isSignedIn,
-  });
+  const navLinkClass = (href: string) => {
+    const isActive = pathname === href || pathname.startsWith(href + "/");
+    return [
+      "hidden md:flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap",
+      isActive
+        ? "text-blue-600 dark:text-blue-400 font-semibold bg-blue-50 dark:bg-blue-900/20 rounded-lg"
+        : "text-zinc-600 hover:text-zinc-900 dark:text-white/70 dark:hover:text-white",
+    ].join(" ");
+  };
+
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -71,6 +118,11 @@ export function TopNav({ hideAuth = false }: TopNavProps) {
         </Link>
 
         <div className="flex items-center gap-2 ml-auto">
+          <WebSocketLatencyBadge
+            latencyMs={latencyMs}
+            tier={tier}
+            className="hidden sm:flex px-2 py-1 rounded-lg bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700"
+          />
           <div className="flex items-center justify-center shrink-0">
             <ThemeToggle />
           </div>
@@ -126,7 +178,7 @@ export function TopNav({ hideAuth = false }: TopNavProps) {
                   {/* Desktop Links */}
                   <Link
                     href="/ai"
-                    className="hidden md:flex items-center gap-2 px-4 py-2 text-sm text-zinc-600 hover:text-zinc-900 dark:text-white/70 dark:hover:text-white font-medium transition-colors whitespace-nowrap"
+                    className={navLinkClass("/ai")}
                   >
                     <Coffee className="w-4 h-4" />
                     Dashboard
@@ -134,7 +186,7 @@ export function TopNav({ hideAuth = false }: TopNavProps) {
 
                   <Link
                     href="/collections"
-                    className="hidden md:flex items-center gap-2 px-4 py-2 text-sm text-zinc-600 hover:text-zinc-900 dark:text-white/70 dark:hover:text-white font-medium transition-colors whitespace-nowrap"
+                    className={navLinkClass("/collections")}
                   >
                     <LayoutGrid className="w-4 h-4" />
                     Collections

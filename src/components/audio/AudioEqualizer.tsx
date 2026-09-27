@@ -151,6 +151,7 @@ export function AudioEqualizer({
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
   const eqFiltersRef = useRef<BiquadFilterNode[]>([]);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -232,7 +233,23 @@ export function AudioEqualizer({
     const analyser = ctx.createAnalyser();
 
     analyser.fftSize = 64;
-    masterGain.connect(analyser);
+    // DynamicsCompressorNode prevents digital clipping when 5+ participants
+    // mix their audio tracks through the same Web Audio graph (4:1 ratio,
+    // -24 dB knee for gentle limiting before the master output).
+    if (typeof ctx.createDynamicsCompressor === "function") {
+      const compressor = ctx.createDynamicsCompressor();
+      if (compressor.threshold) compressor.threshold.value = -24;
+      if (compressor.knee) compressor.knee.value = 12;
+      if (compressor.ratio) compressor.ratio.value = 4;
+      if (compressor.attack) compressor.attack.value = 0.003;
+      if (compressor.release) compressor.release.value = 0.25;
+      compressorRef.current = compressor;
+
+      masterGain.connect(compressor);
+      compressor.connect(analyser);
+    } else {
+      masterGain.connect(analyser);
+    }
     analyser.connect(ctx.destination);
 
     // Build 5-band BiquadFilterNode cascade
@@ -322,6 +339,10 @@ export function AudioEqualizer({
 
   // Handle Real-Time Gain Slider Drag with Smooth Audio Parameter Ramping
   const handleBandGainChange = (index: number, newGain: number) => {
+    // Clamp to ±20 dB hard limit — values outside this range cause BiquadFilterNode
+    // clipping and severe audio distortion on some browsers.
+    const clampedGain = Math.max(-20, Math.min(20, newGain));
+
     setEqPreset("custom");
     if (typeof window !== "undefined") {
       window.localStorage.setItem("webrtc_eq_preset", "custom");
@@ -329,7 +350,7 @@ export function AudioEqualizer({
 
     setBandGains((prev) => {
       const next = [...prev];
-      next[index] = newGain;
+      next[index] = clampedGain;
       if (typeof window !== "undefined") {
         window.localStorage.setItem("webrtc_eq_gains", JSON.stringify(next));
       }
@@ -337,7 +358,7 @@ export function AudioEqualizer({
     });
 
     if (onGainChange) {
-      onGainChange(index, newGain);
+      onGainChange(index, clampedGain);
     }
 
     const filter = eqFiltersRef.current[index];
@@ -345,12 +366,12 @@ export function AudioEqualizer({
       const now = audioContextRef.current.currentTime;
       if (typeof filter.gain.setTargetAtTime === "function") {
         // Smooth audio param ramp to eliminate audio pops and clicks
-        filter.gain.setTargetAtTime(newGain, now, 0.015);
+        filter.gain.setTargetAtTime(clampedGain, now, 0.015);
       } else if (typeof filter.gain.linearRampToValueAtTime === "function") {
         filter.gain.setValueAtTime(filter.gain.value ?? 0, now);
-        filter.gain.linearRampToValueAtTime(newGain, now + 0.03);
+        filter.gain.linearRampToValueAtTime(clampedGain, now + 0.03);
       } else if (typeof filter.gain.setValueAtTime === "function") {
-        filter.gain.setValueAtTime(newGain, now);
+        filter.gain.setValueAtTime(clampedGain, now);
       }
     }
   };
@@ -525,7 +546,20 @@ export function AudioEqualizer({
   }, [volume, muted]);
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (
+        document.visibilityState === "visible" &&
+        audioContextRef.current &&
+        audioContextRef.current.state !== "closed"
+      ) {
+        audioContextRef.current.resume().catch(() => {});
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       stopPlayingNodes();
       if (audioContextRef.current) {
         audioContextRef.current.close();
@@ -757,16 +791,19 @@ export function AudioEqualizer({
           </button>
         </div>
 
-        <div className="grid grid-cols-5 gap-2 text-center">
+        <div className="grid grid-cols-5 gap-1 sm:gap-2 text-center">
           {EQ_BAND_LABELS.map((label, idx) => (
-            <div key={label} className="flex flex-col items-center gap-1.5">
-              <span className="text-[10px] font-mono text-zinc-400">
+            <div
+              key={label}
+              className="flex flex-col items-center justify-between gap-1 sm:gap-1.5 min-w-0"
+            >
+              <span className="text-[9px] sm:text-[10px] font-mono text-zinc-400 whitespace-nowrap">
                 {label}
               </span>
               <input
                 type="range"
-                min="-12"
-                max="12"
+                min="-20"
+                max="20"
                 step="0.5"
                 aria-label={`${label} Gain`}
                 value={bandGains[idx]}
@@ -775,7 +812,7 @@ export function AudioEqualizer({
                 }
                 className="w-full h-1 bg-zinc-700 accent-indigo-500 rounded-lg cursor-pointer"
               />
-              <span className="text-[9px] font-mono text-indigo-400">
+              <span className="text-[8px] sm:text-[9px] font-mono text-indigo-400 whitespace-nowrap">
                 {bandGains[idx] > 0 ? `+${bandGains[idx]}` : bandGains[idx]} dB
               </span>
             </div>
